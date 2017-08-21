@@ -15,7 +15,9 @@
  */
 package com.google.firebase.udacity.friendlychat;
 
+import android.app.ProgressDialog;
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
 import android.support.annotation.NonNull;
 import android.support.design.widget.Snackbar;
@@ -41,6 +43,9 @@ import com.firebase.ui.auth.AuthUI;
 import com.firebase.ui.auth.ErrorCodes;
 import com.firebase.ui.auth.IdpResponse;
 import com.firebase.ui.auth.ResultCodes;
+import com.google.android.gms.tasks.OnCompleteListener;
+import com.google.android.gms.tasks.OnSuccessListener;
+import com.google.android.gms.tasks.Task;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.database.ChildEventListener;
@@ -48,8 +53,12 @@ import com.google.firebase.database.DataSnapshot;
 import com.google.firebase.database.DatabaseError;
 import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.FirebaseDatabase;
+import com.google.firebase.storage.FirebaseStorage;
+import com.google.firebase.storage.StorageReference;
+import com.google.firebase.storage.UploadTask;
 import com.google.firebase.udacity.friendlychat.dao.MessageDao;
 
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -61,6 +70,8 @@ public class MainActivity extends AppCompatActivity {
     public static final String ANONYMOUS = "anonymous";
     public static final int DEFAULT_MSG_LENGTH_LIMIT = 1000;
     public static final int RC_SIGN_IN = 123;
+    private static final int RC_PHOTO_PICKER =  2;
+    private static final String LOADING_IMAGE_URL = "https://www.google.com/images/spin-32.gif";
 
    // private ListView mMessageListView;
     private RecyclerView recyclerView;
@@ -79,9 +90,15 @@ public class MainActivity extends AppCompatActivity {
     private DatabaseReference mMessagesDatabaseRef;
     private ChildEventListener mChildEventListener;
 
+    private FirebaseStorage mFirebaseStorage;
+    private StorageReference mChatPhotosStorageReference;
+
     private FirebaseAuth auth;
     private FirebaseAuth.AuthStateListener authStateListener;
 
+    private FirebaseUser mFirebaseUser;
+
+    private ProgressDialog mProgressDialog;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -89,7 +106,13 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         mFirebaseDatabase = FirebaseDatabase.getInstance();
+        mFirebaseStorage = FirebaseStorage.getInstance();
+
+        mProgressDialog = new ProgressDialog(this);
+
         mMessagesDatabaseRef = mFirebaseDatabase.getReference().child("messages");
+        mChatPhotosStorageReference = mFirebaseStorage.getReference().child("chat_photos");
+
 
         mUsername = ANONYMOUS;
 
@@ -121,13 +144,15 @@ public class MainActivity extends AppCompatActivity {
 
         auth = FirebaseAuth.getInstance();
 
-
+        mFirebaseUser = auth.getCurrentUser();
 
         // ImagePickerButton shows an image picker to upload a image for a message
         mPhotoPickerButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                // TODO: Fire an intent to show an image picker
+                Intent intent = new Intent(Intent.ACTION_PICK);
+                intent.setType("image/*");
+                startActivityForResult(intent, RC_PHOTO_PICKER);
             }
         });
 
@@ -162,7 +187,7 @@ public class MainActivity extends AppCompatActivity {
                 Message message = new Message(mMessageEditText.getText().toString(), mUsername, null);
                // mesageDao.write(message);
                 mMessagesDatabaseRef.push().setValue(message);
-                showSnackbar("Ubacio sam ga");
+
                 // Clear input box
                 mMessageEditText.setText("");
             }
@@ -179,7 +204,7 @@ public class MainActivity extends AppCompatActivity {
                 if(user != null){
                     //already signed in
                     onSignedInInitialize(user.getDisplayName());
-                    showSnackbar("You are signed in");
+                    //showSnackbar("You are signed in");
                 }else{
                     //not signed in
                     onSignedOutInitialize();
@@ -253,36 +278,79 @@ public class MainActivity extends AppCompatActivity {
                         .build(),
                 RC_SIGN_IN);
     }
-
+   // compile 'com.squareup.picasso:picasso:2.5.2'
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+     /*
+        if(requestCode == RC_PHOTO_PICKER && resultCode == ResultCodes.OK){
+            mProgressDialog.setMessage("Uploading...");
+            mProgressDialog.show();
+
+            if(data != null){
+                final Uri uri = data.getData();
+                StorageReference filePath = mChatPhotosStorageReference.child("chat_photos").child(uri.getLastPathSegment());
+                filePath.putFile(uri).addOnSuccessListener(new OnSuccessListener<UploadTask.TaskSnapshot>() {
+                    @Override
+                    public void onSuccess(UploadTask.TaskSnapshot taskSnapshot) {
+                        showToast("Ubacio sam sliku");
+                        mProgressDialog.dismiss();
+                    }
+                });
+
+            }
+
+        }
+    */
+
+        if(requestCode == RC_PHOTO_PICKER && resultCode == ResultCodes.OK){
+            Uri selectedImageUri = data.getData();
+
+            mProgressDialog.setMessage("Uploading...");
+            mProgressDialog.show();
+
+            StorageReference photRef =
+                    mChatPhotosStorageReference.child(selectedImageUri.getLastPathSegment());
+            photRef.putFile(selectedImageUri).addOnSuccessListener(this, new OnSuccessListener<UploadTask.TaskSnapshot>() {
+                @Override
+                public void onSuccess(UploadTask.TaskSnapshot taskSnapshot) {
+                    Uri downloadUrl = taskSnapshot.getDownloadUrl();
+                    Message msg = new Message(null, mUsername, downloadUrl.toString());
+                    mMessagesDatabaseRef.push().setValue(msg);
+                    mProgressDialog.dismiss();
+                    showToast("Ubacio sam sliku");
+                }
+            });
+        }
         if(requestCode == RC_SIGN_IN){
             // Successfully signed in
             IdpResponse response = IdpResponse.fromResultIntent(data);
             if(resultCode == ResultCodes.OK){
 
-                showSnackbar("You are signed in");
+               // showSnackbar("You are signed in");
+
             }else if(resultCode == ResultCodes.CANCELED) {
+                showToast("Some shit happened");
                 finish();
-            }else{
-                // Sign in failed
-                if(response == null){
-                    // User pressed back button
-                     showSnackbar("Sign in canceled");
-                    finish();
-                    return;
-                }
-                if(response.getErrorCode() == ErrorCodes.NO_NETWORK){
-                    showSnackbar("There is no internet connection");
-                    return;
-                }
-                if(response.getErrorCode() == ErrorCodes.UNKNOWN_ERROR){
-                    showSnackbar("Some error occured");
-                    return;
-                }
             }
+
+
         }
+    }
+
+    private void putImageInStorage(StorageReference storageRef, Uri selectedImageUri, final String key) {
+        storageRef.putFile(selectedImageUri).addOnCompleteListener(MainActivity.this,
+                new OnCompleteListener<UploadTask.TaskSnapshot>() {
+                    @Override
+                    public void onComplete(@NonNull Task<UploadTask.TaskSnapshot> task) {
+                        if(task.isSuccessful()){
+                            Message msg =
+                                    new Message(null, mUsername,
+                                            task.getResult().getDownloadUrl().toString());
+                            mMessagesDatabaseRef.push().setValue(msg);
+                        }
+                    }
+                });
     }
 
     @Override
